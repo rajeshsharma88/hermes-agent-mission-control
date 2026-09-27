@@ -1,35 +1,78 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
-// Shared garden blob — same source as Marwa's dashboard (source of truth)
-const GARDEN_BLOB = 'https://jsonblob.com/api/jsonBlob/019cce3a-7bc9-7e88-9e8f-fe461957b1aa';
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+// Garden data now lives in our own Postgres (DataStore table) instead of
+// the old shared jsonblob.com blob, which started returning Cloudflare
+// bot-protection HTML instead of JSON (breaking this route with a 500).
+// One row, keyed "garden", holds the whole blob — same shape the UI
+// already expects, so src/app/garden/page.tsx needed no changes.
+const GARDEN_KEY = "garden";
+
+interface Plant {
+  id: string;
+  name: string;
+  emoji: string;
+  location: "indoor" | "outdoor";
+  waterSchedule: string;
+  waterDays: number[];
+  img?: string;
+  tip?: string;
+  addedBy?: string;
+  addedAt?: string;
+}
+
+interface GardenBlob {
+  version: number;
+  lastUpdated: string;
+  plants: Plant[];
+}
+
+const EMPTY_GARDEN: GardenBlob = {
+  version: 1,
+  lastUpdated: new Date(0).toISOString(),
+  plants: [],
+};
 
 export async function GET() {
   try {
-    const res = await fetch(GARDEN_BLOB, {
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      cache: 'no-store',
+    const row = await prisma.dataStore.findUnique({ where: { key: GARDEN_KEY } });
+    const data = (row?.data as unknown as GardenBlob) || EMPTY_GARDEN;
+    return NextResponse.json(data, {
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
     });
-    if (!res.ok) throw new Error(`jsonblob GET failed: ${res.status}`);
-    const data = await res.json();
-    return NextResponse.json(data);
   } catch (e) {
-    console.error('Garden GET error:', e);
-    return NextResponse.json({ error: 'Failed to fetch garden' }, { status: 500 });
+    console.error("Garden GET error:", e);
+    return NextResponse.json({ error: "Failed to fetch garden" }, { status: 500 });
   }
 }
 
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const res = await fetch(GARDEN_BLOB, {
-      method: 'PUT',
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    const payload: GardenBlob = {
+      version: typeof body?.version === "number" ? body.version : 1,
+      lastUpdated: new Date().toISOString(),
+      plants: Array.isArray(body?.plants) ? body.plants : [],
+    };
+
+    // Prisma's Json field wants InputJsonValue, which requires an index
+    // signature our plain GardenBlob interface doesn't have — the shape
+    // is still plain JSON, so this cast is safe.
+    const jsonPayload = payload as unknown as Prisma.InputJsonValue;
+
+    await prisma.dataStore.upsert({
+      where: { key: GARDEN_KEY },
+      update: { data: jsonPayload },
+      create: { key: GARDEN_KEY, data: jsonPayload },
     });
-    if (!res.ok) throw new Error(`jsonblob PUT failed: ${res.status}`);
-    return NextResponse.json({ ok: true });
+
+    return NextResponse.json({ ok: true, garden: payload });
   } catch (e) {
-    console.error('Garden PUT error:', e);
-    return NextResponse.json({ error: 'Failed to update garden' }, { status: 500 });
+    console.error("Garden PUT error:", e);
+    return NextResponse.json({ error: "Failed to update garden" }, { status: 500 });
   }
 }
