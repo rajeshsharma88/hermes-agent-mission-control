@@ -21,15 +21,6 @@ interface Agent {
   recentActivity: AgentActivity[];
 }
 
-// ── Desk layout ───────────────────────────────────────────
-const DESK_LAYOUT = [
-  { agentId: "max",   label: "CEO Corner",   zone: "ceo" },
-  { agentId: "sage",  label: "Research Bay", zone: "team" },
-  { agentId: "knox",  label: "Ops Desk",     zone: "team" },
-  { agentId: "nova",  label: "Creative Hub", zone: "team" },
-  { agentId: "pixel", label: "Lab",          zone: "team" },
-];
-
 // ── Status → visual config ────────────────────────────────
 const STATUS: Record<string, { glow: string; dot: string; bg: string; ring?: string }> = {
   working:   { glow: "shadow-[0_0_24px_6px_rgba(56,189,248,0.45)]",  dot: "bg-sky-400",     bg: "bg-sky-900/30 border-sky-500/40",     ring: "rgba(56,189,248,0.5)" },
@@ -42,13 +33,23 @@ const STATUS: Record<string, { glow: string; dot: string; bg: string; ring?: str
 };
 
 // ── Per-agent walk timing (keeps them out of sync) ────────
-const WALK = {
-  max:   { wanderDur: "14s", bobDur: "0.35s", bobDelay: "0s",    wanderDelay: "0s" },
-  sage:  { wanderDur: "8s",  bobDur: "0.40s", bobDelay: "0.1s",  wanderDelay: "1.2s" },
-  knox:  { wanderDur: "11s", bobDur: "0.45s", bobDelay: "0.2s",  wanderDelay: "2.5s" },
-  nova:  { wanderDur: "9s",  bobDur: "0.38s", bobDelay: "0.05s", wanderDelay: "0.7s" },
-  pixel: { wanderDur: "12s", bobDur: "0.42s", bobDelay: "0.15s", wanderDelay: "3.1s" },
-};
+// Derived from the agent id so the whole roster stays desynchronised at any
+// size, and so a new Hermes profile needs no entry here.
+function hashId(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function walkFor(id: string) {
+  const h = hashId(id);
+  return {
+    wanderDur: `${8 + (h % 7)}s`,                              // 8–14s
+    bobDur: `${(0.35 + ((h >> 3) % 12) / 100).toFixed(2)}s`,   // 0.35–0.46s
+    bobDelay: `${((h >> 6) % 20) / 100}s`,                     // 0–0.19s
+    wanderDelay: `${((h >> 9) % 40) / 10}s`,                   // 0–3.9s
+  };
+}
 
 // ── Pixel art sprites ─────────────────────────────────────
 // '.' = transparent, letter = palette color
@@ -160,9 +161,9 @@ const SPRITE_DATA: Record<string, { palette: Record<string, string>; rows: strin
   },
 };
 
-function PixelSprite({ agentId, size }: { agentId: string; size: number }) {
+function PixelSprite({ agentId, size, fallback }: { agentId: string; size: number; fallback?: string }) {
   const data = SPRITE_DATA[agentId];
-  if (!data) return <span style={{ fontSize: size * 0.6 }}>🤖</span>;
+  if (!data) return <span style={{ fontSize: size * 0.6, lineHeight: 1 }}>{fallback || "🤖"}</span>;
   const { palette, rows } = data;
   const gw = rows[0]?.length ?? 16;
   const gh = rows.length;
@@ -229,29 +230,29 @@ function MonitorScreen({ isWorking }: { isWorking: boolean }) {
 }
 
 // ── Agent desk tile ───────────────────────────────────────
-function AgentDesk({ agent, label, isMax }: { agent: Agent | undefined; label: string; isMax: boolean }) {
-  const rawStatus = agent?.status ?? "offline";
+function AgentDesk({ agent }: { agent: Agent }) {
+  const rawStatus = agent.status ?? "offline";
   const statusKey = STATUS[rawStatus] ? rawStatus : "idle";
   const colors = STATUS[statusKey];
   const isWorking = rawStatus === "working";
-  const isOffline = rawStatus === "offline" || !agent;
-  const spriteSize = isMax ? 56 : 44;
-  const walk = WALK[agent?.id as keyof typeof WALK] ?? WALK.sage;
+  const isOffline = rawStatus === "offline";
+  const spriteSize = 44;
+  const walk = walkFor(agent.id);
 
   // Pick bubble text: currentTask > last activity > null
-  const bubbleText = agent?.currentTask
-    || agent?.recentActivity?.[0]?.action
+  const bubbleText = agent.currentTask
+    || agent.recentActivity?.[0]?.action
     || null;
 
   // Bubble cycle delay — stagger so not all pop at once
-  const bubbleDelay = isMax ? "0.5s" : walk.wanderDelay;
+  const bubbleDelay = walk.wanderDelay;
 
   return (
     <div className="relative flex flex-col items-center gap-2">
       {/* Desk tile */}
       <div
         className={`relative rounded-2xl border overflow-visible transition-all duration-500
-          ${isMax ? "w-44 h-44" : "w-36 h-36"}
+          w-36 h-36
           ${colors.bg} ${colors.glow}
           ${isOffline ? "opacity-40" : ""}
           hover:scale-105 hover:z-10`}
@@ -297,7 +298,7 @@ function AgentDesk({ agent, label, isMax }: { agent: Agent | undefined; label: s
                   : undefined
               }
             >
-              <PixelSprite agentId={agent?.id ?? ""} size={spriteSize} />
+              <PixelSprite agentId={agent.id} size={spriteSize} fallback={agent.emoji} />
             </div>
           </div>
 
@@ -305,13 +306,13 @@ function AgentDesk({ agent, label, isMax }: { agent: Agent | undefined; label: s
           <div className="flex items-center gap-1 mt-1">
             <div className={`w-1.5 h-1.5 rounded-full ${colors.dot} ${isWorking ? "animate-pulse" : ""}`} />
             <span className={`text-[10px] font-bold tracking-wider uppercase ${isOffline ? "text-neutral-600" : "text-white/80"}`}>
-              {agent?.name ?? "Empty"}
+              {agent.name}
             </span>
           </div>
         </div>
 
         {/* Tasks badge */}
-        {agent && agent.tasksCompleted > 0 && (
+        {agent.tasksCompleted > 0 && (
           <div className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-neutral-700 border border-neutral-600 flex items-center justify-center z-10">
             <span className="text-[9px] font-bold text-white">{agent.tasksCompleted > 99 ? "99+" : agent.tasksCompleted}</span>
           </div>
@@ -319,10 +320,11 @@ function AgentDesk({ agent, label, isMax }: { agent: Agent | undefined; label: s
       </div>
 
       {/* Label */}
-      <div className="text-center">
-        <div className={`text-[10px] uppercase tracking-wider ${isOffline ? "text-neutral-700" : "text-neutral-500"}`}>{label}</div>
-        {agent?.role && <div className="text-[10px] text-neutral-600 truncate max-w-[140px]">{agent.role}</div>}
-      </div>
+      {agent.role && (
+        <div className={`text-center text-[10px] uppercase tracking-wider truncate max-w-[140px] ${isOffline ? "text-neutral-700" : "text-neutral-500"}`}>
+          {agent.role}
+        </div>
+      )}
     </div>
   );
 }
@@ -354,10 +356,6 @@ function ActivityTicker({ agents }: { agents: Agent[] }) {
 
 // ── Main export ───────────────────────────────────────────
 export default function OfficeView({ agents }: { agents: Agent[] }) {
-  const getAgent = (id: string) => agents.find(a => a.id === id);
-  const maxAgent = getAgent("max");
-  const teamDesks = DESK_LAYOUT.filter(d => d.agentId !== "max");
-
   return (
     <div className="relative rounded-3xl overflow-hidden border border-neutral-800/60 bg-neutral-950/80">
       {/* Floor */}
@@ -380,18 +378,18 @@ export default function OfficeView({ agents }: { agents: Agent[] }) {
           </div>
         </div>
 
-        {/* Desks */}
-        <div className="flex flex-col items-center gap-8">
-          {/* Row 1 — Max */}
-          <AgentDesk agent={maxAgent} label="CEO Corner" isMax={true} />
-          <div className="w-px h-4 bg-neutral-700/60" />
-          {/* Row 2 — Team */}
+        {/* Desks — one per agent the API reports, in the order it sends them */}
+        {agents.length === 0 ? (
+          <div className="text-center text-[11px] font-mono text-neutral-600 py-10">
+            No agents reporting.
+          </div>
+        ) : (
           <div className="flex flex-wrap justify-center gap-6 md:gap-8">
-            {teamDesks.map(desk => (
-              <AgentDesk key={desk.agentId} agent={getAgent(desk.agentId)} label={desk.label} isMax={false} />
+            {agents.map(agent => (
+              <AgentDesk key={agent.id} agent={agent} />
             ))}
           </div>
-        </div>
+        )}
 
         {/* Activity ticker */}
         <div className="mt-8">
