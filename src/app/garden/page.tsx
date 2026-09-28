@@ -142,7 +142,7 @@ export default function GardenPage() {
           <div className="eyebrow mb-2.5">🌿 Shared Garden</div>
           <h1 className="text-[32px] font-semibold tracking-[-0.025em] leading-none text-[var(--text)]">Our Garden</h1>
           <p className="num text-[var(--text-4)] text-[12px] mt-3">
-            Syncs with Marwa every 30s · {blob.plants.length} plants
+            Auto-refreshes every 30s · {blob.plants.length} plants
           </p>
         </div>
         <Button variant="primary" onClick={() => setShowForm(true)}>
